@@ -1,27 +1,76 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import "./App.css";
 
-// Enhanced noun extraction that captures all potential nouns
-const extractNouns = (text) => {
-  // Common words to exclude
+// Symbol to filename mapping
+const symbolToFilename = {
+  '+': 'plus',
+  '-': 'minus',
+  '*': 'times',
+  '/': 'dividedby',
+  '=': 'equals',
+  '!': 'exclamation',
+  '?': 'question',
+  '@': 'at',
+  '#': 'hash',
+  '$': 'dollar',
+  '%': 'percent',
+  '^': 'caret',
+  '&': 'and',
+  '(': 'leftparenthesis',
+  ')': 'rightparenthesis'
+};
+
+// Only handle irregular plurals
+const toSingular = (word) => {
+  const irregulars = {
+    children: 'child',
+    people: 'person',
+    men: 'man',
+    women: 'woman',
+    feet: 'foot',
+    teeth: 'tooth',
+    mice: 'mouse',
+    geese: 'goose',
+    oxen: 'ox',
+    lice: 'louse',
+    criteria: 'criterion',
+    phenomena: 'phenomenon'
+  };
+  return irregulars[word] || word;
+};
+
+// Enhanced object extraction that preserves order and duplicates
+const extractObjects = (text) => {
   const stopWords = new Set([
-    'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 
+    'a', 'an', 'the', 'and', 'or', 'but', 'is', 'are', 'was', 'were',
     'to', 'of', 'in', 'on', 'at', 'for', 'with', 'under', 'over', 'this',
     'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they',
-    'my', 'your', 'his', 'her', 'its', 'our', 'their', 'there', 'here'
+    'my', 'your', 'his', 'her', 'its', 'our', 'their', 'there', 'here',
+    'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+    'can', 'could', 'shall', 'should', 'may', 'might', 'must'
   ]);
 
-  // Remove special characters
-  const specialChars = /[.,/#!$%^&*;:{}=_`~()]/g;
-  const cleanedText = text.toLowerCase().replace(specialChars, '');
-  
-  // Split into words and filter
+  // Clean text and preserve numbers and symbols
+  // Fixed all unnecessary escape characters in regex
+  const cleanedText = text.toLowerCase().replace(/[^a-z0-9\s+*=!?@#$%^&()/-]/g, '');
   const words = cleanedText.split(/\s+/).filter(word => 
-    word.length > 2 && !stopWords.has(word)
+    word.length > 0 && !stopWords.has(word)
   );
 
-  return words;
+  // Preserve order and duplicates
+  return words.map(word => {
+    // Check if it's a number first
+    if (/^\d+$/.test(word)) return word;
+    // Check if it's a symbol that has a corresponding image
+    if (symbolToFilename[word]) return word;
+    // Finally apply irregular plural conversion
+    return toSingular(word);
+  });
 };
+
+// ... [Rest of the component code remains exactly the same as previous version]
+// Including all the state, effects, handlers, and JSX
+
 
 const App = () => {
   const [images, setImages] = useState([]);
@@ -30,7 +79,7 @@ const App = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [chatMessages, setChatMessages] = useState([
-    { sender: 'ai', text: 'Welcome! Describe a scene and I\'ll find all matching images.' }
+    { sender: 'ai', text: 'Welcome! Describe anything to see matching images.' }
   ]);
   const [browserSupport, setBrowserSupport] = useState(true);
   
@@ -47,25 +96,38 @@ const App = () => {
     });
   }, []);
 
-  const tryImageExtensions = useCallback(async (baseName) => {
-    const extensions = ['.jpg', '.png', '.jpeg', '.webp'];
+  const tryImageExtensions = useCallback(async (object) => {
+    const extensions = ['.png', '.jpg', '.jpeg', '.webp'];
     const imageUrlBase = 'http://localhost:5000/images/';
     
-    // Try all extensions in parallel
-    const imageChecks = await Promise.all(
-      extensions.map(async (ext) => {
-        const imageUrl = `${imageUrlBase}${baseName}${ext}`;
-        const exists = await checkImageExists(imageUrl);
-        return exists ? { 
-          url: imageUrl, 
-          name: `${baseName}${ext}`,
-          displayName: baseName 
-        } : null;
-      })
-    );
-
-    // Return the first existing image found
-    return imageChecks.find(image => image !== null) || null;
+    // First try the exact object name
+    for (const ext of extensions) {
+      const exists = await checkImageExists(`${imageUrlBase}${object}${ext}`);
+      if (exists) {
+        return {
+          url: `${imageUrlBase}${object}${ext}`,
+          name: `${object}${ext}`,
+          displayName: object
+        };
+      }
+    }
+    
+    // If no exact match, try symbol filenames
+    if (symbolToFilename[object]) {
+      const symbolFile = symbolToFilename[object];
+      for (const ext of extensions) {
+        const exists = await checkImageExists(`${imageUrlBase}${symbolFile}${ext}`);
+        if (exists) {
+          return {
+            url: `${imageUrlBase}${symbolFile}${ext}`,
+            name: `${symbolFile}${ext}`,
+            displayName: object // Show the original symbol
+          };
+        }
+      }
+    }
+    
+    return null;
   }, [checkImageExists]);
 
   const handleRecognitionError = useCallback((error) => {
@@ -84,25 +146,45 @@ const App = () => {
     setChatMessages(prev => [...prev, { sender: 'ai', text: errorMessage }]);
   }, []);
 
-  const processScene = useCallback(async (text = inputValue) => {
-    const valueToUse = text || inputValue;
-    if (!valueToUse.trim()) {
-      setError("Please describe a scene");
+  const toggleListening = useCallback(async () => {
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      recognitionRef.current.start();
+      setIsListening(true);
+      setChatMessages(prev => [...prev, { 
+        sender: 'ai', 
+        text: "Listening... Speak now" 
+      }]);
+      setError("");
+    } catch (error) {
+      handleRecognitionError(error);
+    }
+  }, [isListening, handleRecognitionError]);
+
+  const processInput = useCallback(async (text = inputValue) => {
+    const valueToUse = text.trim();
+    if (!valueToUse) {
+      setError("Please enter some text");
       return;
     }
 
     setIsLoading(true);
     setChatMessages(prev => [...prev, { 
       sender: 'user', 
-      text: `Processing scene: "${valueToUse}"` 
+      text: `Processing: "${valueToUse}"` 
     }]);
 
     try {
-      // Extract all potential nouns
-      const nouns = extractNouns(valueToUse);
+      const objects = extractObjects(valueToUse);
       
-      if (nouns.length === 0) {
-        setError("No identifiable objects found in the description");
+      if (objects.length === 0) {
+        setError("No identifiable objects found");
         setChatMessages(prev => [...prev, { 
           sender: 'ai', 
           text: "I couldn't find any objects in that description." 
@@ -112,32 +194,33 @@ const App = () => {
 
       setChatMessages(prev => [...prev, { 
         sender: 'ai', 
-        text: `Looking for: ${nouns.join(', ')}` 
+        text: `Looking for: ${objects.join(', ')}` 
       }]);
 
-      // Process all nouns in parallel
-      const imageResults = await Promise.all(
-        nouns.map(noun => tryImageExtensions(noun))
-      );
-
-      // Filter out null results and flatten the array
-      const foundImages = imageResults.filter(img => img !== null);
+      // Process objects in order and preserve duplicates
+      const foundImages = [];
+      for (const obj of objects) {
+        const image = await tryImageExtensions(obj);
+        if (image) {
+          foundImages.push(image);
+        }
+      }
 
       if (foundImages.length > 0) {
-        setImages(prev => [...prev, ...foundImages]);
+        setImages(foundImages);
         setChatMessages(prev => [...prev, { 
           sender: 'ai', 
-          text: `Found ${foundImages.length} images matching your scene` 
+          text: `Found ${foundImages.length} matching images in order` 
         }]);
         setInputValue("");
         setError("");
       } else {
-        const errorMsg = `No images found for any objects in "${valueToUse}"`;
+        const errorMsg = `No images found for "${valueToUse}"`;
         setError(errorMsg);
         setChatMessages(prev => [...prev, { sender: 'ai', text: errorMsg }]);
       }
     } catch (err) {
-      setError("Failed to process the scene description");
+      setError("Failed to process input");
       setChatMessages(prev => [...prev, { 
         sender: 'ai', 
         text: "Sorry, there was an error processing your request." 
@@ -147,30 +230,6 @@ const App = () => {
     }
   }, [inputValue, tryImageExtensions]);
 
-  const toggleListening = useCallback(async () => {
-    if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(track => track.stop());
-      
-      recognitionRef.current.start();
-      setIsListening(true);
-      setChatMessages(prev => [...prev, { 
-        sender: 'ai', 
-        text: "Listening... Describe a scene" 
-      }]);
-      setError("");
-    } catch (error) {
-      handleRecognitionError(error);
-    }
-  }, [isListening, handleRecognitionError]);
-
-  // Initialize speech recognition
   useEffect(() => {
     const initSpeechRecognition = async () => {
       try {
@@ -189,11 +248,10 @@ const App = () => {
           setInputValue(transcript);
           setChatMessages(prev => [...prev, { 
             sender: 'user', 
-            text: `Described scene: ${transcript}` 
+            text: `You said: ${transcript}` 
           }]);
-          setTimeout(() => {
-            processScene(transcript);
-          }, 500);
+          setIsListening(false);
+          setTimeout(() => processInput(transcript), 500);
         };
 
         recognitionRef.current.onerror = (event) => {
@@ -206,16 +264,19 @@ const App = () => {
           setIsListening(false);
         };
       } catch (error) {
-        console.error('Speech recognition initialization error:', error);
         setBrowserSupport(false);
         handleRecognitionError(error);
       }
     };
 
     initSpeechRecognition();
-  }, [processScene, handleRecognitionError]);
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, [processInput, handleRecognitionError]);
 
-  // Auto-scroll chat and adjust image track
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
@@ -236,13 +297,13 @@ const App = () => {
 
   const handleKeyPress = (e) => {
     if (e.key === "Enter") {
-      processScene();
+      processInput();
     }
   };
 
   const clearAll = () => {
     setImages([]);
-    setChatMessages([{ sender: 'ai', text: 'Canvas cleared. Ready for new scenes.' }]);
+    setChatMessages([{ sender: 'ai', text: 'Canvas cleared. Ready for new input.' }]);
   };
 
   return (
@@ -259,7 +320,7 @@ const App = () => {
           ))}
           {isLoading && (
             <div className="chat-bubble ai-bubble">
-              Processing your scene description...
+              Processing your input...
             </div>
           )}
         </div>
@@ -282,7 +343,7 @@ const App = () => {
             </div>
           ) : (
             <div className="empty-state">
-              {browserSupport ? 'Describe a scene to see matching images' : 'Type a scene description'}
+              {browserSupport ? 'Speak or type to see images' : 'Type to see images'}
             </div>
           )}
         </div>
@@ -291,7 +352,9 @@ const App = () => {
           <input
             type="text"
             className="prompt-input"
-            placeholder={browserSupport ? "Describe a scene (e.g., 'A sunny beach with palm trees')..." : "Type a scene description..."}
+            placeholder={browserSupport ? 
+              "Describe anything (e.g., '1 + 1')..." : 
+              "Type a description..."}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyPress={handleKeyPress}
@@ -305,12 +368,12 @@ const App = () => {
                 onClick={toggleListening}
                 disabled={isLoading}
               >
-                {isListening ? '🛑 Stop' : '🎤 Speak'}
+                {isListening ? '🛑 Listening...' : '🎤 Speak'}
               </button>
             )}
             <button
               className="submit-button"
-              onClick={() => processScene()}
+              onClick={() => processInput()}
               disabled={isLoading || !inputValue.trim()}
             >
               {isLoading ? 'Processing...' : 'Find Images'}
@@ -318,7 +381,7 @@ const App = () => {
           </div>
           
           <div className="mic-status">
-            {isListening ? 'Listening...' : error || (browserSupport ? 'Ready' : 'Type your description')}
+            {isListening ? 'Speak now...' : error || 'Ready'}
           </div>
         </div>
       </div>
