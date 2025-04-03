@@ -2,14 +2,14 @@ import psycopg2
 import os
 
 # Database connection parameters
-DB_HOST = "127.0.0.1"
-DB_PORT = "5434"
-DB_NAME = "image_db"
-DB_USER = "image_user"
-DB_PASSWORD = "visuweave"
+DB_HOST = "**********"
+DB_PORT = "**********"
+DB_NAME = "**********"
+DB_USER = "***********"
+DB_PASSWORD = "*********"
 
 # Path to the folder containing images
-image_folder = "/home/geek/Downloads/Unisys 2025/Dataset"
+image_folder = "path"
 
 # Connect to the database
 conn = psycopg2.connect(
